@@ -3,9 +3,12 @@ package providers
 import (
 	"context"
 	"fmt"
-	"time"
-
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"golang.org/x/oauth2"
+	"strings"
+	"time"
 
 	oidc "github.com/coreos/go-oidc"
 )
@@ -36,41 +39,49 @@ func (p *OIDCProvider) Redeem(redirectURL, code string) (s *SessionState, err er
 		return nil, fmt.Errorf("token exchange: %v", err)
 	}
 
-	rawIDToken, ok := token.Extra("id_token").(string)
+	rawAcessToken, ok := token.Extra("access_token").(string)
 	if !ok {
-		return nil, fmt.Errorf("token response did not contain an id_token")
+		return nil, fmt.Errorf("token response did not contain an access_token")
 	}
 
-	// Parse and verify ID Token payload.
-	idToken, err := p.Verifier.Verify(ctx, rawIDToken)
+	var email string
+	email, err = emailFromAccessToken(rawAcessToken)
 	if err != nil {
-		return nil, fmt.Errorf("could not verify id_token: %v", err)
-	}
-
-	// Extract custom claims.
-	var claims struct {
-		Email    string `json:"email"`
-		Verified *bool  `json:"email_verified"`
-	}
-	if err := idToken.Claims(&claims); err != nil {
-		return nil, fmt.Errorf("failed to parse id_token claims: %v", err)
-	}
-
-	if claims.Email == "" {
-		return nil, fmt.Errorf("id_token did not contain an email")
-	}
-	if claims.Verified != nil && !*claims.Verified {
-		return nil, fmt.Errorf("email in id_token (%s) isn't verified", claims.Email)
+		return
 	}
 
 	s = &SessionState{
 		AccessToken:  token.AccessToken,
 		RefreshToken: token.RefreshToken,
 		ExpiresOn:    token.Expiry,
-		Email:        claims.Email,
+		Email:        email,
 	}
 
 	return
+}
+
+func emailFromAccessToken(accessToken string) (string, error) {
+
+	// id_token is a base64 encode ID token payload
+	// https://developers.google.com/accounts/docs/OAuth2Login#obtainuserinfo
+	jwt := strings.Split(accessToken, ".")
+	jwtData := strings.TrimSuffix(jwt[1], "=")
+	b, err := base64.RawURLEncoding.DecodeString(jwtData)
+	if err != nil {
+		return "", err
+	}
+
+	var email struct {
+		Email         string `json:"email"`
+	}
+	err = json.Unmarshal(b, &email)
+	if err != nil {
+		return "", err
+	}
+	if email.Email == "" {
+		return "", errors.New("missing email")
+	}
+	return email.Email, nil
 }
 
 func (p *OIDCProvider) RefreshSessionIfNeeded(s *SessionState) (bool, error) {
