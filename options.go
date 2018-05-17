@@ -274,7 +274,6 @@ func parseProviderInfo(o *Options, msgs []string) []string {
 		}
 	case *providers.OIDCProvider:
 		if o.oidcVerifier == nil {
-			msgs = append(msgs, "oidc provider requires an oidc issuer URL")
 		} else {
 			p.Verifier = o.oidcVerifier
 		}
